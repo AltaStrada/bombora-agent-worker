@@ -14,12 +14,19 @@ def run_bombora(email, password, recipient_email,
         ctx = browser.new_context(accept_downloads=True)
         page = ctx.new_page()
 
-        # 1 ── Sign in
-        page.goto("https://login.bombora.com/u/login/identifier")
-        page.fill('input[type="email"]', email)
-        page.click('button[type="submit"]')
-        page.fill('input[type="password"]', password)
-        page.click('button[type="submit"]')
+# ── 1.  Sign in ──────────────────────────────────────────────
+page.goto("https://login.bombora.com/u/login/identifier")
+
+# wait until the username box is present (up to 60 s)
+page.wait_for_selector('#username', timeout=60000)
+
+page.fill('#username', email)                  # type e‑mail
+page.click('button[type="submit"]')            # Next / Continue
+
+page.wait_for_selector('input[name="password"]', timeout=60000)
+page.fill('input[name="password"]', password)  # type password
+page.click('button[type="submit"]')            # Sign in
+
 
         # 2 ── Open saved Company‑Surge template
         page.goto("https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0")
