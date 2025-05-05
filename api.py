@@ -16,9 +16,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/spreadsheets"
 ]
-creds = service_account.Credentials. \
-            from_service_account_file(os.environ["GOOGLE_APPLICATION_CREDENTIALS"],
-                                      scopes=SERVICE_SCOPES)
+CREDS = service_account.Credentials.from_service_account_file(
+            "/etc/secrets/service_acct.json", scopes=SCOPES)
 
 # ── 2.  FastAPI schema for POST body ─────────────────────────────────────
 class Req(BaseModel):
