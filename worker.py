@@ -28,9 +28,9 @@ def run_bombora(email: str, password: str, recipient_email: str,
         page.fill("#username", email)
         page.click('button[type="submit"]')
 
-        page.wait_for_selector('input[name="password"]', timeout=60_000)
-        page.fill('input[name="password"]', password)
-        page.click('button[type="submit"]')
+        page.wait_for_selector("#password", timeout=60000)
+        page.fill("#password", password)
+        page.click('button:has-text("Continue")')
 
         # ── 2.  Open saved Company‑Surge template ────────────────
         page.goto("https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0")
