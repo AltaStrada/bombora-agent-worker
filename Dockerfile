@@ -1,5 +1,5 @@
 # --- Dockerfile ---
-FROM mcr.microsoft.com/playwright/python:v1.41.2-jammy
+FROM mcr.microsoft.com/playwright/python:v1.52.0-jammy
 
 WORKDIR /app
 COPY . .
