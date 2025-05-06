@@ -1,4 +1,14 @@
+# worker.py
+# ------------------------------------------------------------------
+# Playwright helper for Bombora workflow
+# 1. Logs in (two‑step screen: username ▸ Continue ▸ password ▸ Continue)
+# 2. Opens saved Company‑Surge template, turns on Summary + Comprehensive
+# 3. Sets report‑recipient e‑mail, clicks Generate Report, waits for XLSX
+# 4. Returns the downloaded file path
+# ------------------------------------------------------------------
+
 from playwright.sync_api import sync_playwright
+
 
 def run_bombora(email: str, password: str, recipient_email: str,
                 client_url: str, competitor_url: str) -> str:
@@ -8,25 +18,24 @@ def run_bombora(email: str, password: str, recipient_email: str,
         ctx     = browser.new_context(accept_downloads=True)
         page    = ctx.new_page()
 
-        # ── 1. Login ────────────────────────────────────────────
+        # ── 1. Login (two‑step) ─────────────────────────────────
         page.goto("https://login.bombora.com/u/login/identifier")
 
+        # 1a. Fill username and click first Continue
         page.wait_for_selector("#username", timeout=60_000)
         page.fill("#username", email)
-        # debug snapshot — optional
-        page.screenshot(path="/tmp/after_username.png", full_page=True)
-        # Wait for password field visible on the **same screen**
+        page.click('button:has-text("Continue")')
+
+        # 1b. Wait for password field, fill it, click second Continue
         page.wait_for_selector('input[type="password"]', timeout=60_000)
         page.fill('input[type="password"]', password)
-
-        # Click the orange Continue button
         page.click('button:has-text("Continue")')
 
         # ── 2. Open saved Company‑Surge template ───────────────
         page.goto("https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0")
         page.wait_for_selector("text=Report Output", timeout=15_000)
 
-        # ── 3. Ensure Summary & Comprehensive toggles are ON ───
+        # 3. Ensure Summary & Comprehensive toggles are ON
         def ensure_toggle(label: str):
             toggle = (
                 page.locator(f"text={label}")
@@ -38,15 +47,13 @@ def run_bombora(email: str, password: str, recipient_email: str,
         ensure_toggle("Summary")
         ensure_toggle("Comprehensive")
 
-        # ── 4. Fill report recipient ───────────────────────────
+        # 4. Fill report recipient e‑mail
         page.fill('input[placeholder="name@example.com"]', recipient_email)
 
-        # ── 5. Generate report & await download ────────────────
+        # 5. Generate report and wait for XLSX download (3 min max)
         with page.expect_download(timeout=180_000) as dl:
             page.click('button:has-text("Generate Report")')
 
         xlsx_path = dl.value.path()
-
-        ctx.close()
-        browser.close()
+        ctx.close(); browser.close()
         return xlsx_path
