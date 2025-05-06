@@ -1,10 +1,11 @@
 # worker.py
 # ------------------------------------------------------------------
 # Playwright helper for Bombora workflow
-# • Two‑step login (username ▸ Continue ▸ password ▸ Continue)
-# • Debug: saves screenshot & partial DOM after first Continue
-# • Uses label‑based selector to target visible password field
-# • Generates Company‑Surge report, waits for XLSX, returns its path
+# • Login workflow that mirrors Bombora’s exact UX:
+#     1.  Type e‑mail in #username  →  press Enter
+#     2.  Password field appears   →  type password  →  press Enter
+# • Opens saved Company‑Surge template, toggles Summary & Comprehensive
+# • Sends report to recipient, waits for XLSX download, returns its path
 # ------------------------------------------------------------------
 
 from playwright.sync_api import sync_playwright
@@ -12,37 +13,35 @@ from playwright.sync_api import sync_playwright
 
 def run_bombora(email: str, password: str, recipient_email: str,
                 client_url: str, competitor_url: str) -> str:
+    """
+    Logs into Bombora, runs Company‑Surge template, downloads XLSX,
+    returns the absolute file path.
+    """
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx     = browser.new_context(accept_downloads=True)
         page    = ctx.new_page()
 
-        # ── 1. Login ────────────────────────────────────────────
+        # ── 1.  Go to login page ────────────────────────────────
         page.goto("https://login.bombora.com/u/login/identifier")
 
-        # 1a. Username ▸ Continue
+        # 1a. Fill e‑mail, hit Enter (Bombora reveals password field)
         page.wait_for_selector("#username", timeout=60_000)
         page.fill("#username", email)
-        page.click('button:has-text("Continue")')
+        page.press("#username", "Enter")
 
-        # 🔍 DEBUG: snapshot & DOM after username step
-        page.screenshot(path="/tmp/after_continue.png", full_page=True)
-        print("📸 saved after_continue.png")
-        print("DOM snippet:",
-              page.inner_html("body")[:1000].replace("\n", " ")[:1000])
+        # 1b. Wait for visible password input, fill, press Enter
+        pwd_sel = 'input[type="password"]:not(.hide):not([aria-hidden="true"])'
+        page.wait_for_selector(pwd_sel, timeout=60_000)
+        page.fill(pwd_sel, password)
+        page.press(pwd_sel, "Enter")
 
-        # 1b. Locate password field by label, fill, Continue
-        pwd_locator = page.locator("label:has-text('Password')").locator("input")
-        pwd_locator.wait_for(state="visible", timeout=60_000)
-        pwd_locator.fill(password)
-        page.click('button:has-text("Continue")')
-
-        # ── 2. Open saved Company‑Surge template ───────────────
+        # ── 2.  Open saved Company‑Surge template ───────────────
         page.goto("https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0")
         page.wait_for_selector("text=Report Output", timeout=15_000)
 
-        # 3. Ensure Summary & Comprehensive toggles are ON
+        # 3.  Ensure Summary & Comprehensive toggles are ON
         def ensure_toggle(label: str):
             toggle = (
                 page.locator(f"text={label}")
@@ -54,10 +53,10 @@ def run_bombora(email: str, password: str, recipient_email: str,
         ensure_toggle("Summary")
         ensure_toggle("Comprehensive")
 
-        # 4. Fill report recipient
+        # 4.  Fill report‑recipient e‑mail
         page.fill('input[placeholder="name@example.com"]', recipient_email)
 
-        # 5. Generate report & await XLSX download
+        # 5.  Generate report and wait for XLSX download (≤3 min)
         with page.expect_download(timeout=180_000) as dl:
             page.click('button:has-text("Generate Report")')
 
