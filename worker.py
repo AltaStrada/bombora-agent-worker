@@ -1,9 +1,10 @@
 # worker.py
 # ------------------------------------------------------------------
 # Playwright helper for Bombora workflow
-# 1. Logs in (two‑step screen: username ▸ Continue ▸ password ▸ Continue)
-# 2. Opens saved Company‑Surge template, turns on Summary + Comprehensive
-# 3. Sets report‑recipient e‑mail, clicks Generate Report, waits for XLSX
+# 1. Logs in (username ▸ Continue ▸ password ▸ Continue)
+#    – skips the hidden password input by filtering .hide / aria‑hidden
+# 2. Opens saved Company‑Surge template, toggles Summary + Comprehensive
+# 3. Sets report recipient, generates report, waits for XLSX download
 # 4. Returns the downloaded file path
 # ------------------------------------------------------------------
 
@@ -21,14 +22,15 @@ def run_bombora(email: str, password: str, recipient_email: str,
         # ── 1. Login (two‑step) ─────────────────────────────────
         page.goto("https://login.bombora.com/u/login/identifier")
 
-        # 1a. Fill username and click first Continue
+        # 1a. Username ▸ Continue
         page.wait_for_selector("#username", timeout=60_000)
         page.fill("#username", email)
         page.click('button:has-text("Continue")')
 
-        # 1b. Wait for password field, fill it, click second Continue
-        page.wait_for_selector('input[type="password"]', timeout=60_000)
-        page.fill('input[type="password"]', password)
+        # 1b. Visible password input (ignore hidden placeholder)
+        pwd_selector = 'input[type="password"]:not(.hide):not([aria-hidden="true"])'
+        page.wait_for_selector(pwd_selector, timeout=60_000)
+        page.locator(pwd_selector).fill(password)
         page.click('button:has-text("Continue")')
 
         # ── 2. Open saved Company‑Surge template ───────────────
@@ -50,7 +52,7 @@ def run_bombora(email: str, password: str, recipient_email: str,
         # 4. Fill report recipient e‑mail
         page.fill('input[placeholder="name@example.com"]', recipient_email)
 
-        # 5. Generate report and wait for XLSX download (3 min max)
+        # 5. Generate report and wait for XLSX download
         with page.expect_download(timeout=180_000) as dl:
             page.click('button:has-text("Generate Report")')
 
