@@ -1,86 +1,105 @@
-# worker.py  ─────────────────────────────────────────────────────────────
-# Playwright helper for Bombora → downloads Company‑Surge XLSX
-# -----------------------------------------------------------------------
+# worker.py  – Bombora login + report download (Playwright)
+# -----------------------------------------------
+# • Retries the e‑mail “Continue” step up to 3×
+# • After every click/Enter it dumps a screenshot and first 5 000 chars
+#   of the page’s HTML to /tmp and to stdout so you can inspect logs.
+# -----------------------------------------------
+
 from pathlib import Path
-from time import sleep
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from typing   import Optional
+from playwright.sync_api import (
+    sync_playwright, TimeoutError as PWTimeout
+)
+
+REPORT_URL = "https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0"
 
 
-def run_bombora(email: str,
-                pwd: str,
-                recipient_email: str,
-                client_url: str,
-                competitor_url: str) -> str:
-    """Logs in, triggers saved Company‑Surge template, waits for XLSX,
-    returns local file‑path."""
+def debug_dump(page, label: str) -> None:
+    """Save screenshot + partial HTML; path printed so Render logs show it."""
+    img = Path(f"/tmp/{label}.png")
+    html = Path(f"/tmp/{label}.html")
+    page.screenshot(path=str(img), full_page=True)
+    html.write_text(page.content())
+    print(f"📸 saved {img.name}")
+    print("HTML_DUMP_START")
+    print(page.content()[:5000])
+    print("HTML_DUMP_END")
+
+
+def wait_and_fill(page, selector: str, value: str, timeout: int = 60_000):
+    page.wait_for_selector(selector, timeout=timeout)
+    page.fill(selector, value)
+
+
+def run_bombora(email: str, password: str, recipient_email: str,
+                client_url: str, competitor_url: str) -> str:
+    """
+    Logs into Bombora, runs saved Company‑Surge template,
+    waits for XLSX download and returns the local filepath.
+    """
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx     = browser.new_context(accept_downloads=True)
         page    = ctx.new_page()
 
-        # 1️⃣  OPEN LOGIN PAGE -------------------------------------------------
-        page.goto("https://login.bombora.com/u/login/identifier",
-                  wait_until="domcontentloaded")
+        # 1️⃣  Go to login
+        page.goto("https://login.bombora.com/u/login/identifier")
 
-        # 2️⃣  ENTER E‑MAIL + FIGHT THE DOUBLE‑CLICK --------------------------
-        page.fill("input[name='username']", email)
+        # ── Put e‑mail, then repeatedly press Continue / Enter until
+        #    the password field appears (max 3 tries) ───────────────
+        wait_and_fill(page, "#username", email)
 
-        # Try Continue (or Enter) up to 3× until password field shows
-        for attempt in range(3):
-            page.keyboard.press("Enter")              # quickest
+        pw_box: Optional[str] = None
+        for attempt in range(1, 4):
+            # Click Continue (or press Enter)
             try:
-                page.wait_for_selector("input[name='password']",
-                                       timeout=3_000)
-                break                                 # success
+                page.click('button:has-text("Continue")', timeout=5_000)
             except PWTimeout:
-                # maybe Bombora needs the visible button click…
-                try:
-                    page.click("button:has-text('Continue')",
-                               timeout=1_000)
-                except PWTimeout:
-                    pass
-                sleep(1)                              # tiny grace pause
-        else:
+                page.keyboard.press("Enter")
+
+            debug_dump(page, f"after_continue_{attempt}")
+
+            # try to locate the real password input (not hidden)
+            try:
+                pw_box = page.wait_for_selector(
+                    'input[name="password"]:not([type="hidden"])',
+                    timeout=5_000
+                ).locator("#password").selector
+                break  # got it
+            except PWTimeout:
+                continue
+
+        if pw_box is None:
             raise RuntimeError("Password form never appeared")
 
-        # 3️⃣  ENTER PASSWORD & SUBMIT ----------------------------------------
-        page.fill("input[name='password']", pwd)
-        # Bombora accepts Enter; keep a back‑up click just in case
+        # 2️⃣  Fill password & submit
+        wait_and_fill(page, pw_box, password)
         page.keyboard.press("Enter")
-        sleep(1)
-        try:
-            page.click("button:has-text('Continue')", timeout=1_500)
-        except PWTimeout:
-            pass                                      # fine if button gone
+        debug_dump(page, "after_password")
 
-        # 4️⃣  OPEN SAVED COMPANY‑SURGE TEMPLATE ------------------------------
-        page.goto("https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0",
-                  wait_until="networkidle")
+        # 3️⃣  Navigate to saved template
+        page.goto(REPORT_URL, wait_until="domcontentloaded")
+        page.wait_for_selector("text=Report Output", timeout=30_000)
 
-        # Wait until the “Report Output” tab is present
-        page.wait_for_selector("text=Report Output", timeout=15_000)
+        # Ensure Summary + Comprehensive toggles are ON
+        def toggle(label: str):
+            t = page.locator(f"text={label}")\
+                    .locator("xpath=../..//div[contains(@class,'toggle')]")
+            if "off" in (t.get_attribute("class") or ""):
+                t.click()
 
-        # 5️⃣  ENSURE SUMMARY & COMPREHENSIVE TOGGLES ON ----------------------
-        def ensure_toggle(label: str):
-            tog = page.locator(f"text={label}") \
-                      .locator("xpath=../..//div[contains(@class,'toggle')]")
-            cls = tog.get_attribute("class") or ""
-            if "off" in cls:
-                tog.click()
-                sleep(0.2)
+        toggle("Summary")
+        toggle("Comprehensive")
 
-        ensure_toggle("Summary")
-        ensure_toggle("Comprehensive")
+        # 4️⃣  Recipient e‑mail
+        page.fill('input[placeholder*="example.com"]', recipient_email)
 
-        # 6️⃣  SET RECIPIENT & RUN REPORT ------------------------------------
-        page.fill('input[placeholder="name@example.com"]', recipient_email)
+        # 5️⃣  Generate report → wait for download
+        with page.expect_download(timeout=300_000) as dl:
+            page.click('button:has-text("Generate Report")')
 
-        with page.expect_download(timeout=180_000) as dl_info:
-            page.click("button:has-text('Generate Report')")
-
-        xlsx_file: Path = dl_info.value.path()         # local temp file
-
+        xlsx_path = dl.value.path()
         ctx.close()
         browser.close()
-        return str(xlsx_file)
+        return xlsx_path
