@@ -15,7 +15,7 @@ def run_bombora(email: str, password: str, recipient_email: str,
         page.fill("#username", email)
 
         page.wait_for_selector("#password", timeout=60_000)
-        page.fill("#password", password)
+        page.fill(input[type="password"],password)
 
         page.click('button:has-text("Continue")')
 
