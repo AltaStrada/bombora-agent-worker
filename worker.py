@@ -13,7 +13,8 @@ def run_bombora(email: str, password: str, recipient_email: str,
 
         page.wait_for_selector("#username", timeout=60_000)
         page.fill("#username", email)
-
+        # debug snapshot — optional
+        page.screenshot(path="/tmp/after_username.png", full_page=True)
         # Wait for password field visible on the **same screen**
         page.wait_for_selector('input[type="password"]', timeout=60_000)
         page.fill('input[type="password"]', password)
