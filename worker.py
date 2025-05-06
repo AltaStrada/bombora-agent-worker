@@ -21,8 +21,8 @@ page.fill(pwd_sel, password)
 page.press(pwd_sel, "Enter")
 
         # ── 2.  Open saved Company‑Surge template ───────────────
-        page.goto("https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0")
-        page.wait_for_selector("text=Report Output", timeout=15_000)
+    page.goto("https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0")
+    page.wait_for_selector("text=Report Output", timeout=15_000)
 
         # 3.  Ensure Summary & Comprehensive toggles are ON
         def ensure_toggle(label: str):
