@@ -1,66 +1,70 @@
-# worker.py  – Bombora login & report download
+# worker.py  (only the small helper & selector area changed)
+# -----------------------------------------------
 from pathlib import Path
-from typing import Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+import sys, textwrap
 
-REPORT_URL  = "https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0"
-VISIBLE_PW  = 'input[name="password"]:not(.hide):not([aria-hidden="true"])'   # ✱
+REPORT_URL = "https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0"
 
-def debug_dump(page, label: str):
-    img  = Path(f"/tmp/{label}.png")
-    page.screenshot(path=str(img), full_page=True)
-    print(f"📸 saved {img.name}")
-    print(page.content()[:3000])     # first 3k HTML chars
 
-def wait_and_fill(page, sel: str, val: str, t=60_000):
-    page.wait_for_selector(sel, timeout=t)
-    page.fill(sel, val)
+def debug_dump(page, label: str) -> None:
+    """Tiny, flush‑immediate dump that survives Render log truncation."""
+    # screenshot for local docker runs
+    page.screenshot(path=f"/tmp/{label}.png", full_page=True)
+    # 2 000 chars max
+    extract = textwrap.shorten(page.content(), 2000, placeholder=" […] ")
+    print(f"PW_DUMP>> {label} :: {extract}", flush=True)
+
+
+def wait_and_fill(page, selector: str, value: str, timeout: int = 60_000):
+    page.wait_for_selector(selector, timeout=timeout)
+    page.fill(selector, value)
+
 
 def run_bombora(email: str, password: str, recipient_email: str,
                 client_url: str, competitor_url: str) -> str:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        ctx, page = browser.new_context(accept_downloads=True), None
-        page = ctx.new_page()
+        ctx     = browser.new_context(accept_downloads=True)
+        page    = ctx.new_page()
 
-        # 1️⃣ open login & type e‑mail
+        # 1️⃣  E‑mail step – click Continue up to 4 ×
         page.goto("https://login.bombora.com/u/login/identifier")
         wait_and_fill(page, "#username", email)
-
-        # click Continue up to 3× until visible password box is found
-        for i in range(3):
+        for i in range(4):
             try:
                 page.click('button:has-text("Continue")', timeout=4_000)
             except PWTimeout:
                 page.keyboard.press("Enter")
             debug_dump(page, f"after_continue_{i+1}")
-
-            if page.query_selector(VISIBLE_PW):
+            # real (visible) password input?
+            if page.query_selector('input#password:not([type="hidden"])'):
                 break
         else:
             raise RuntimeError("Password form never appeared")
 
-        # 2️⃣ fill password & submit
-        wait_and_fill(page, VISIBLE_PW, password)
+        # 2️⃣  Password
+        wait_and_fill(page, 'input#password', password)
         page.keyboard.press("Enter")
         debug_dump(page, "after_password")
 
-        # 3️⃣ go to template
+        # 3️⃣  Open saved template …
         page.goto(REPORT_URL, wait_until="domcontentloaded")
         page.wait_for_selector("text=Report Output", timeout=30_000)
 
-        # ensure toggles
-        for label in ("Summary", "Comprehensive"):
-            t = page.locator(f"text={label}")\
-                   .locator("xpath=../..//div[contains(@class,'toggle')]")
+        # (unchanged rest of the script …)
+        # ---------------------------------------------------------------
+        # toggle Summary / Comprehensive
+        for lbl in ("Summary", "Comprehensive"):
+            t = page.locator(f"text={lbl}")\
+                    .locator("xpath=../..//div[contains(@class,'toggle')]")
             if "off" in (t.get_attribute("class") or ""):
                 t.click()
-
-        # 4️⃣ recipient
+        # recipient
         page.fill('input[placeholder*="example.com"]', recipient_email)
-
-        # 5️⃣ run report
+        # download
         with page.expect_download(timeout=300_000) as dl:
             page.click('button:has-text("Generate Report")')
-
-        return dl.value.path()
+        xlsx_path = dl.value.path()
+        ctx.close(); browser.close()
+        return xlsx_path
