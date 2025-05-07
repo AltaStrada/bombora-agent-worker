@@ -1,94 +1,66 @@
-# worker.py  – Bombora login + Company‑Surge download
-# --------------------------------------------------
-# ✔ waits for URL change to “…/password”
-# ✔ retries the Continue click / Enter up to 3×
-# ✔ dumps screenshot + HTML after each attempt
-# --------------------------------------------------
-
+# worker.py  – Bombora login & report download
 from pathlib import Path
 from typing import Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-REPORT_URL = "https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0"
+REPORT_URL  = "https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0"
+VISIBLE_PW  = 'input[name="password"]:not(.hide):not([aria-hidden="true"])'   # ✱
 
+def debug_dump(page, label: str):
+    img  = Path(f"/tmp/{label}.png")
+    page.screenshot(path=str(img), full_page=True)
+    print(f"📸 saved {img.name}")
+    print(page.content()[:3000])     # first 3k HTML chars
 
-def dump(page, tag: str) -> None:
-  img  = Path(f"/tmp/{tag}.png")
-  html = Path(f"/tmp/{tag}.html")
-  page.screenshot(path=str(img), full_page=True)
-  html.write_text(page.content())
-  print(f"📸 {img.name} / {html.name}")
+def wait_and_fill(page, sel: str, val: str, t=60_000):
+    page.wait_for_selector(sel, timeout=t)
+    page.fill(sel, val)
 
-
-def run_bombora(email: str, password: str, recipient: str,
+def run_bombora(email: str, password: str, recipient_email: str,
                 client_url: str, competitor_url: str) -> str:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        ctx, page = browser.new_context(accept_downloads=True), None
+        page = ctx.new_page()
 
-  with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
-    ctx     = browser.new_context(accept_downloads=True)
-    page    = ctx.new_page()
+        # 1️⃣ open login & type e‑mail
+        page.goto("https://login.bombora.com/u/login/identifier")
+        wait_and_fill(page, "#username", email)
 
-    # 1️⃣  open login page
-    page.goto("https://login.bombora.com/u/login/identifier",
-              wait_until="domcontentloaded")
+        # click Continue up to 3× until visible password box is found
+        for i in range(3):
+            try:
+                page.click('button:has-text("Continue")', timeout=4_000)
+            except PWTimeout:
+                page.keyboard.press("Enter")
+            debug_dump(page, f"after_continue_{i+1}")
 
-    # E‑mail
-    page.fill("#username", email)
+            if page.query_selector(VISIBLE_PW):
+                break
+        else:
+            raise RuntimeError("Password form never appeared")
 
-    pw_visible: bool = False
-    for attempt in range(1, 4):
-      # click Continue (fallback to Enter if button missing)
-      try:
-        page.click('button:has-text("Continue")', timeout=4_000)
-      except PWTimeout:
+        # 2️⃣ fill password & submit
+        wait_and_fill(page, VISIBLE_PW, password)
         page.keyboard.press("Enter")
+        debug_dump(page, "after_password")
 
-      # Wait for location to contain “…/password” (up to 10 s)
-      try:
-        page.wait_for_url("**/password", timeout=10_000)
-      except PWTimeout:
-        pass  # user might already be on /password
+        # 3️⃣ go to template
+        page.goto(REPORT_URL, wait_until="domcontentloaded")
+        page.wait_for_selector("text=Report Output", timeout=30_000)
 
-      # Wait up to 6 s for a *visible* password box
-      try:
-        page.wait_for_selector('#password:visible', timeout=6_000)
-        pw_visible = True
-        dump(page, f"password_ready_{attempt}")
-        break
-      except PWTimeout:
-        dump(page, f"after_continue_{attempt}")
-        continue
+        # ensure toggles
+        for label in ("Summary", "Comprehensive"):
+            t = page.locator(f"text={label}")\
+                   .locator("xpath=../..//div[contains(@class,'toggle')]")
+            if "off" in (t.get_attribute("class") or ""):
+                t.click()
 
-    if not pw_visible:
-      raise RuntimeError("Password form never appeared")
+        # 4️⃣ recipient
+        page.fill('input[placeholder*="example.com"]', recipient_email)
 
-    # 2️⃣  fill password & submit
-    page.fill('#password', password)
-    page.keyboard.press("Enter")
-    dump(page, "after_submit_pwd")
+        # 5️⃣ run report
+        with page.expect_download(timeout=300_000) as dl:
+            page.click('button:has-text("Generate Report")')
 
-    # 3️⃣  open saved Company‑Surge template
-    page.goto(REPORT_URL, wait_until="domcontentloaded")
-    page.wait_for_selector("text=Report Output", timeout=30_000)
-
-    # ensure Summary & Comprehensive toggles ON
-    def ensure(label: str):
-      t = page.locator(f"text={label}") \
-              .locator("xpath=../..//div[contains(@class,'toggle')]")
-      if "off" in (t.get_attribute("class") or ""):
-        t.click()
-
-    ensure("Summary")
-    ensure("Comprehensive")
-
-    # 4️⃣  recipient e‑mail
-    page.fill('input[placeholder*="example.com"]', recipient)
-
-    # 5️⃣  run report → await download
-    with page.expect_download(timeout=300_000) as dl:
-      page.click('button:has-text("Generate Report")')
-
-    xlsx = dl.value.path()
-    ctx.close()
-    browser.close()
-    return xlsx
+        return dl.value.path()
