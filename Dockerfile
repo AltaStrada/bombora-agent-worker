@@ -1,10 +1,13 @@
-# --- Dockerfile ---
+# Dockerfile
 FROM mcr.microsoft.com/playwright/python:v1.52.0-jammy
+
+# ↓ ONE extra line – installs only Chromium once during build
+RUN playwright install chromium
 
 WORKDIR /app
 COPY . .
 
-RUN pip install -r requirements.txt   # installs FastAPI, pandas, etc.
+# install Python deps
+RUN pip install -r requirements.txt
 
-ENV PORT=8080
 CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8080"]
