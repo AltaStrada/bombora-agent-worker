@@ -1,8 +1,9 @@
 # worker.py  – Bombora login + report download (Playwright)
 # ----------------------------------------------------------
-# • Retries the e-mail “Continue” step up to 3×
-# • After every click/Enter it dumps a screenshot and HTML
-#   so you can inspect exactly what the bot saw.
+# • Submits your username with two ENTERs
+# • Waits by #password (no hidden‐input gymnastics)
+# • Debug‐dumps immediately after email and after password
+# • Fails fast if Report Output never becomes visible
 # ----------------------------------------------------------
 
 from pathlib import Path
@@ -12,21 +13,15 @@ REPORT_URL = "https://surge.bombora.com/Surge/Manage?a=88411#/Edit/0"
 
 
 def debug_dump(page, label: str) -> None:
-    """Save screenshot + full HTML; logs the paths so Render shows them."""
+    """Save screenshot + partial HTML; flush prints so Render logs show them immediately."""
     img = Path(f"/tmp/{label}.png")
     html = Path(f"/tmp/{label}.html")
     page.screenshot(path=str(img), full_page=True)
     html.write_text(page.content())
-    print(f"📸 PW_DUMP {label} :: saved {img.name}")
-    print("HTML_DUMP_START")
-    print(page.content()[:5000])
-    print("HTML_DUMP_END")
-
-
-def wait_and_fill(page, selector: str, value: str, timeout: int = 60_000):
-    """Wait for selector visible, then fill."""
-    page.wait_for_selector(selector, timeout=timeout)
-    page.fill(selector, value)
+    print(f"📸 PW_DUMP {label} :: saved {img.name}", flush=True)
+    print("HTML_DUMP_START", flush=True)
+    print(page.content()[:5000], flush=True)
+    print("HTML_DUMP_END", flush=True)
 
 
 def run_bombora(email: str, password: str, recipient_email: str,
@@ -36,41 +31,37 @@ def run_bombora(email: str, password: str, recipient_email: str,
         ctx     = browser.new_context(accept_downloads=True)
         page    = ctx.new_page()
 
-        # 1️⃣ Go to login page
+        # 1️⃣  Go to login page & dump
         page.goto("https://login.bombora.com/u/login/identifier")
         debug_dump(page, "login_loaded")
 
-        # fill email
-        wait_and_fill(page, "#username", email)
+        # 2️⃣  Fill username, press ENTER twice
+        page.fill("#username", email)
+        page.keyboard.press("Enter")
+        page.keyboard.press("Enter")
+        debug_dump(page, "after_email_enter")
 
-        # now hit Continue up to 3× until the real password field appears
-        pw_selector = 'input[name="password"]:not([type="hidden"])'
-        for attempt in range(1, 4):
-            try:
-                page.click('button:has-text("Continue")', timeout=5_000)
-            except PWTimeout:
-                page.keyboard.press("Enter")
-            debug_dump(page, f"after_continue_{attempt}")
-
-            # check for password field
-            try:
-                page.wait_for_selector(pw_selector, timeout=5_000)
-                break
-            except PWTimeout:
-                continue
-        else:
+        # 3️⃣  Wait for the real password field
+        try:
+            page.wait_for_selector("input#password", timeout=60_000)
+        except PWTimeout:
+            debug_dump(page, "password_field_missing")
             raise RuntimeError("Password form never appeared")
 
-        # 2️⃣ fill password + submit
-        wait_and_fill(page, pw_selector, password)
+        # 4️⃣  Fill password & submit
+        page.fill("input#password", password)
         page.keyboard.press("Enter")
-        debug_dump(page, "after_password")
+        debug_dump(page, "after_password_enter")
 
-        # 3️⃣ navigate to the saved report template
-        page.goto(REPORT_URL, wait_until="domcontentloaded")
-        page.wait_for_selector("text=Report Output", timeout=30_000)
+        # 5️⃣  Navigate to report page & wait for Report Output
+        page.goto(REPORT_URL, wait_until="networkidle")
+        try:
+            page.wait_for_selector("div.section-title:has-text('Report Output')", timeout=60_000)
+        except PWTimeout:
+            debug_dump(page, "report_page_failed")
+            raise RuntimeError("Report Output never became visible")
 
-        # 4️⃣ ensure toggles are ON
+        # 6️⃣  Ensure Summary + Comprehensive toggles are ON
         def toggle(label: str):
             t = page.locator(f"text={label}") \
                     .locator("xpath=../..//div[contains(@class,'toggle')]")
@@ -79,12 +70,11 @@ def run_bombora(email: str, password: str, recipient_email: str,
         toggle("Summary")
         toggle("Comprehensive")
 
-        # 5️⃣ set recipient and download
+        # 7️⃣  Fill recipient + download
         page.fill('input[placeholder*="example.com"]', recipient_email)
         with page.expect_download(timeout=180_000) as dl:
             page.click('button:has-text("Generate Report")')
 
-        path = dl.value.path()
-        ctx.close()
-        browser.close()
-        return path
+        xlsx_path = dl.value.path()
+        ctx.close(); browser.close()
+        return xlsx_path
